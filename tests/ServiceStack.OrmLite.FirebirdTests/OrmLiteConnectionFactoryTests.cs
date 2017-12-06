@@ -6,10 +6,10 @@ using ServiceStack.OrmLite.Firebird;
 namespace ServiceStack.OrmLite.FirebirdTests
 {
     [TestFixture]
-    [Ignore]
+    [Ignore("")]
     public class OrmLiteConnectionFactoryTests
     {
-        [TestFixtureSetUp]
+        [OneTimeSetUp]
         public void TestFixtureSetUp()
         {
             OrmLiteConfig.DialectProvider = FirebirdOrmLiteDialectProvider.Instance; //use Pooling=false ?

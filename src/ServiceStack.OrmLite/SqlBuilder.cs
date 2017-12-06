@@ -56,7 +56,7 @@ namespace ServiceStack.OrmLite
                 if (cmdParams == null) return;
                 foreach (var pi in cmdParams.GetType().GetPublicProperties())
                 {
-                    var getterFn = pi.GetPropertyGetterFn();
+                    var getterFn = pi.CreateGetter();
                     if (getterFn == null) continue;
                     var value = getterFn(cmdParams);
                     properties.Add(new Property(pi.Name, pi.PropertyType, value));
@@ -69,7 +69,7 @@ namespace ServiceStack.OrmLite
             public object CreateDynamicType()
             {
                 var assemblyName = new AssemblyName { Name = "tmpAssembly" };
-#if NETSTANDARD1_3
+#if NETSTANDARD2_0
                 var typeBuilder =
                     AssemblyBuilder.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.Run)
                     .DefineDynamicModule("tmpModule")
@@ -144,7 +144,7 @@ namespace ServiceStack.OrmLite
 
                 ctorIL.Emit(OpCodes.Ret);
 
-#if NETSTANDARD1_3
+#if NETSTANDARD2_0
                 var generetedType = typeBuilder.CreateTypeInfo().AsType();
 #else
                 var generetedType = typeBuilder.CreateType();

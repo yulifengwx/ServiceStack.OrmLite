@@ -71,7 +71,7 @@ namespace ServiceStack.OrmLite.Tests
 
                 row.Name = "UpdatedName";
 
-                db.Update(row, x => x.LongId <= row.LongId);
+                db.Update(row, x => x.Long <= row.Long);
 
                 var dbRow = db.SingleById<ModelWithFieldsOfDifferentTypes>(row.Id);
 
@@ -91,7 +91,7 @@ namespace ServiceStack.OrmLite.Tests
                 row.Name = "UpdatedName";
 
                 db.Update<ModelWithFieldsOfDifferentTypes>(new { row.Name, row.DateTime },
-                    x => x.LongId >= row.LongId && x.LongId <= row.LongId);
+                    x => x.Long >= row.Long && x.Long <= row.Long);
 
                 var dbRow = db.SingleById<ModelWithFieldsOfDifferentTypes>(row.Id);
                 Console.WriteLine(dbRow.Dump());
@@ -377,6 +377,13 @@ namespace ServiceStack.OrmLite.Tests
 
                 var row = db.SingleById<Poco>(2);
                 Assert.That(row.Name, Is.EqualTo("UPDATED"));
+
+                sql = "UPDATE poco SET name = {0}name WHERE id = {0}id".Fmt(OrmLiteConfig.DialectProvider.ParamString);
+                result = db.ExecuteSql(sql, new Dictionary<string, object> { {"id", 2}, {"name", "RE-UPDATED" } });
+                Assert.That(result, Is.EqualTo(1));
+
+                row = db.SingleById<Poco>(2);
+                Assert.That(row.Name, Is.EqualTo("RE-UPDATED"));
             }
         }
 

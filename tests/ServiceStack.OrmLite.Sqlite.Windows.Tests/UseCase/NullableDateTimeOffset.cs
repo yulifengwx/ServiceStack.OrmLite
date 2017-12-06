@@ -11,11 +11,11 @@ namespace ServiceStack.OrmLite.Tests.UseCase
     [TestFixture]
     public class NullableDateTimeOffset
     {
-        [TestFixtureSetUp]
+        [OneTimeSetUp]
         public void TestFixtureSetUp()
         {
             //Inject your database provider here
-            OrmLiteConfig.DialectProvider = new SqliteOrmLiteDialectProvider();
+            OrmLiteConfig.DialectProvider = new SqliteWindowsOrmLiteDialectProvider();
         }
 
         public class Record

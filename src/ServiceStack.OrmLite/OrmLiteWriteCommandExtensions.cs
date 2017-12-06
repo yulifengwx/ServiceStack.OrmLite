@@ -276,7 +276,7 @@ namespace ServiceStack.OrmLite
             {
                 return reader.GetOrdinal(dialectProvider.NamingStrategy.GetColumnName(fieldName));
             }
-            catch (IndexOutOfRangeException ignoreNotFoundExInSomeProviders)
+            catch (IndexOutOfRangeException /*ignoreNotFoundExInSomeProviders*/)
             {
                 return NotFound;
             }
@@ -287,23 +287,11 @@ namespace ServiceStack.OrmLite
             IOrmLiteDialectProvider dialectProvider, IDataReader reader, 
             Tuple<FieldDefinition, int, IOrmLiteConverter>[] indexCache, object[] values)
         {
-            try
+            values = PopulateValues(reader, values, dialectProvider);
+
+            foreach (var fieldCache in indexCache)
             {
-                if (!OrmLiteConfig.DeoptimizeReader)
-                {
-                    if (values == null)
-                        values = new object[reader.FieldCount];
-
-                    dialectProvider.GetValues(reader, values);
-                }
-                else
-                {
-                    //Calling GetValues() on System.Data.SQLite.Core ADO.NET Provider changes behavior of reader.GetGuid()
-                    //So allow providers to by-pass reader.GetValues() optimization.
-                    values = null;
-                }
-
-                foreach (var fieldCache in indexCache)
+                try
                 {
                     var fieldDef = fieldCache.Item1;
                     var index = fieldCache.Item2;
@@ -343,12 +331,39 @@ namespace ServiceStack.OrmLite
                         }
                     }
                 }
+                catch (Exception ex)
+                {
+                    OrmLiteUtils.HandleException(ex);
+                }
             }
-            catch (Exception ex)
-            {
-                Log.Error(ex);
-            }
+
             return objWithProperties;
+        }
+
+        internal static object[] PopulateValues(this IDataReader reader, object[] values, IOrmLiteDialectProvider dialectProvider)
+        {
+            if (!OrmLiteConfig.DeoptimizeReader)
+            {
+                if (values == null)
+                    values = new object[reader.FieldCount];
+
+                try
+                {
+                    dialectProvider.GetValues(reader, values);
+                }
+                catch (Exception ex)
+                {
+                    values = null;
+                    Log.Warn("Error trying to use GetValues() from DataReader. Falling back to individual field reads...", ex);
+                }
+            }
+            else
+            {
+                //Calling GetValues() on System.Data.SQLite.Core ADO.NET Provider changes behavior of reader.GetGuid()
+                //So allow providers to by-pass reader.GetValues() optimization.
+                values = null;
+            }
+            return values;
         }
 
         internal static int Update<T>(this IDbCommand dbCmd, T obj, Action<IDbCommand> commandFilter = null)
@@ -603,13 +618,13 @@ namespace ServiceStack.OrmLite
 
         internal static int Delete<T>(this IDbCommand dbCmd, string sql, object anonType = null)
         {
-            if (anonType != null) dbCmd.SetParameters<T>(anonType, excludeDefaults: false);
+            if (anonType != null) dbCmd.SetParameters<T>(anonType, excludeDefaults: false, sql: ref sql);
             return dbCmd.ExecuteSql(dbCmd.GetDialectProvider().ToDeleteStatement(typeof(T), sql));
         }
 
         internal static int Delete(this IDbCommand dbCmd, Type tableType, string sql, object anonType = null)
         {
-            if (anonType != null) dbCmd.SetParameters(tableType, anonType, excludeDefaults: false);
+            if (anonType != null) dbCmd.SetParameters(tableType, anonType, excludeDefaults: false, sql: ref sql);
             return dbCmd.ExecuteSql(dbCmd.GetDialectProvider().ToDeleteStatement(tableType, sql));
         }
 
@@ -624,7 +639,10 @@ namespace ServiceStack.OrmLite
             dialectProvider.SetParameterValues<T>(dbCmd, obj);
 
             if (selectIdentity)
-                return dialectProvider.InsertAndGetLastInsertId<T>(dbCmd);
+            {
+                dbCmd.CommandText += dialectProvider.GetLastInsertIdSqlSuffix<T>();
+                return dbCmd.ExecLongScalar();
+            }
 
             return dbCmd.ExecNonQuery();
         }
@@ -658,7 +676,7 @@ namespace ServiceStack.OrmLite
                     }
                     catch (Exception ex)
                     {
-                        Log.Error("SQL ERROR: {0}".Fmt(dbCmd.GetLastSqlAndParams()), ex);
+                        Log.Error($"SQL ERROR: {dbCmd.GetLastSqlAndParams()}", ex);
                         throw;
                     }
                 }
@@ -702,7 +720,7 @@ namespace ServiceStack.OrmLite
                     }
                     catch (Exception ex)
                     {
-                        Log.Error("SQL ERROR: {0}".Fmt(dbCmd.GetLastSqlAndParams()), ex);
+                        Log.Error($"SQL ERROR: {dbCmd.GetLastSqlAndParams()}", ex);
                         throw;
                     }
                 }
@@ -833,7 +851,7 @@ namespace ServiceStack.OrmLite
                 var listInterface = fieldDef.FieldType.GetTypeWithGenericInterfaceOf(typeof(IList<>));
                 if (listInterface != null)
                 {
-                    var refType = listInterface.GenericTypeArguments()[0];
+                    var refType = listInterface.GetGenericArguments()[0];
                     var refModelDef = refType.GetModelDefinition();
 
                     var refField = modelDef.GetRefFieldDef(refModelDef, refType);
@@ -921,10 +939,10 @@ namespace ServiceStack.OrmLite
             dbCmd.ExecuteNonQuery();
         }
 
-        internal static ulong GetRowVersion(this IDbCommand dbCmd, ModelDefinition modelDef, object id)
+        internal static object GetRowVersion(this IDbCommand dbCmd, ModelDefinition modelDef, object id)
         {
             var sql = RowVersionSql(dbCmd, modelDef, id);
-            return dbCmd.GetDialectProvider().FromDbRowVersion(dbCmd.Scalar<object>(sql));
+            return dbCmd.GetDialectProvider().FromDbRowVersion(modelDef.RowVersion.FieldType, dbCmd.Scalar<object>(sql));
         }
 
         internal static string RowVersionSql(this IDbCommand dbCmd, ModelDefinition modelDef, object id)

@@ -13,7 +13,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.SqlClient;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Text;
@@ -128,34 +127,25 @@ namespace ServiceStack.OrmLite
             var converter = GetConverter(columnType);
             if (converter != null)
             {
-                var customPrecisionConverter = converter as IHasColumnDefinitionPrecision;
-                if (customPrecisionConverter != null)
+                if (converter is IHasColumnDefinitionPrecision customPrecisionConverter)
                     return customPrecisionConverter.GetColumnDefinition(fieldLength, scale);
 
-                var customLengthConverter = converter as IHasColumnDefinitionLength;
-                if (customLengthConverter != null)
+                if (converter is IHasColumnDefinitionLength customLengthConverter)
                     return customLengthConverter.GetColumnDefinition(fieldLength);
 
                 if (string.IsNullOrEmpty(converter.ColumnDefinition))
-                    throw new ArgumentException("{0} requires a ColumnDefinition".Fmt(converter.GetType().Name));
+                    throw new ArgumentException($"{converter.GetType().Name} requires a ColumnDefinition");
 
                 return converter.ColumnDefinition;
             }
 
             var stringConverter = columnType.IsRefType()
                 ? ReferenceTypeConverter
-                : columnType.IsEnum()
+                : columnType.IsEnum
                     ? EnumConverter
                     : (IHasColumnDefinitionLength)ValueTypeConverter;
 
             return stringConverter.GetColumnDefinition(fieldLength);
-        }
-
-        [Obsolete("Use GetConverter().DbType")]
-        public virtual DbType GetColumnDbType(Type columnType)
-        {
-            var converter = GetConverterBestMatch(columnType);
-            return converter.DbType;
         }
 
         public virtual void InitDbParam(IDbDataParameter dbParam, Type columnType)
@@ -178,19 +168,7 @@ namespace ServiceStack.OrmLite
 
         public StringConverter StringConverter => (StringConverter)Converters[typeof(string)];
 
-        [Obsolete("Use GetStringConverter().UseUnicode")]
-        public virtual bool UseUnicode
-        {
-            get { return StringConverter.UseUnicode; }
-            set { StringConverter.UseUnicode = true; }
-        }
-
-        [Obsolete("Use GetStringConverter().StringLength")]
-        public int DefaultStringLength
-        {
-            get { return StringConverter.StringLength; }
-            set { StringConverter.StringLength = value; }
-        }
+        public Action<IDbConnection> OnOpenConnection { get; set; }
 
         public string ParamString { get; set; } = "@";
 
@@ -198,12 +176,19 @@ namespace ServiceStack.OrmLite
 
         public IStringSerializer StringSerializer { get; set; }
 
+        private Func<string, string> paramNameFilter;
+        public Func<string, string> ParamNameFilter
+        {
+            get => paramNameFilter ?? OrmLiteConfig.ParamNameFilter;
+            set => paramNameFilter = value;
+        }
+
         public string DefaultValueFormat = " DEFAULT ({0})";
 
         private EnumConverter enumConverter;
         public EnumConverter EnumConverter
         {
-            get { return enumConverter; }
+            get => enumConverter;
             set
             {
                 value.DialectProvider = this;
@@ -214,7 +199,7 @@ namespace ServiceStack.OrmLite
         private RowVersionConverter rowVersionConverter;
         public RowVersionConverter RowVersionConverter
         {
-            get { return rowVersionConverter; }
+            get => rowVersionConverter;
             set
             {
                 value.DialectProvider = this;
@@ -225,7 +210,7 @@ namespace ServiceStack.OrmLite
         private ReferenceTypeConverter referenceTypeConverter;
         public ReferenceTypeConverter ReferenceTypeConverter
         {
-            get { return referenceTypeConverter; }
+            get => referenceTypeConverter;
             set
             {
                 value.DialectProvider = this;
@@ -236,7 +221,7 @@ namespace ServiceStack.OrmLite
         private ValueTypeConverter valueTypeConverter;
         public ValueTypeConverter ValueTypeConverter
         {
-            get { return valueTypeConverter; }
+            get => valueTypeConverter;
             set
             {
                 value.DialectProvider = this;
@@ -256,9 +241,7 @@ namespace ServiceStack.OrmLite
         public IOrmLiteConverter GetConverter(Type type)
         {
             type = Nullable.GetUnderlyingType(type) ?? type;
-
-            IOrmLiteConverter converter;
-            return Converters.TryGetValue(type, out converter)
+            return Converters.TryGetValue(type, out IOrmLiteConverter converter)
                 ? converter
                 : null;
         }
@@ -269,18 +252,18 @@ namespace ServiceStack.OrmLite
             return converter == null || converter is NativeValueOrmLiteConverter;
         }
 
-        public virtual ulong FromDbRowVersion(object value)
-        {
-            return RowVersionConverter.FromDbRowVersion(value);
-        }
+		public virtual object FromDbRowVersion(Type fieldType, object value)
+		{
+			return RowVersionConverter.FromDbValue(fieldType, value);
+		}
 
-        public IOrmLiteConverter GetConverterBestMatch(Type type)
+		public IOrmLiteConverter GetConverterBestMatch(Type type)
         {
             var converter = GetConverter(type);
             if (converter != null)
                 return converter;
 
-            if (type.IsEnum())
+            if (type.IsEnum)
                 return EnumConverter;
 
             return type.IsRefType()
@@ -295,12 +278,10 @@ namespace ServiceStack.OrmLite
             if (fieldDef.IsRowVersion)
                 return RowVersionConverter;
 
-            IOrmLiteConverter converter;
-
-            if (Converters.TryGetValue(fieldType, out converter))
+            if (Converters.TryGetValue(fieldType, out var converter))
                 return converter;
 
-            if (fieldType.IsEnum())
+            if (fieldType.IsEnum)
                 return EnumConverter;
 
             return fieldType.IsRefType()
@@ -320,8 +301,7 @@ namespace ServiceStack.OrmLite
             }
             catch (Exception ex)
             {
-                Log.Error("Error in {0}.ToDbValue() value '{1}' and Type '{2}'"
-                    .Fmt(converter.GetType().Name, value.GetType().Name, type.Name), ex);
+                Log.Error($"Error in {converter.GetType().Name}.ToDbValue() value '{value.GetType().Name}' and Type '{type.Name}'", ex);
                 throw;
             }
         }
@@ -338,16 +318,14 @@ namespace ServiceStack.OrmLite
             }
             catch (Exception ex)
             {
-                Log.Error("Error in {0}.FromDbValue() value '{1}' and Type '{2}'"
-                    .Fmt(converter.GetType().Name, value.GetType().Name, type.Name), ex);
+                Log.Error($"Error in {converter.GetType().Name}.FromDbValue() value '{value.GetType().Name}' and Type '{type.Name}'", ex);
                 throw;
             }
         }
 
         public object GetValue(IDataReader reader, int columnIndex, Type type)
         {
-            IOrmLiteConverter converter;
-            if (Converters.TryGetValue(type, out converter))
+            if (Converters.TryGetValue(type, out var converter))
                 return converter.GetValue(reader, columnIndex, null);
 
             return reader.GetValue(columnIndex);
@@ -363,6 +341,11 @@ namespace ServiceStack.OrmLite
         public virtual string GetQuotedValue(string paramValue)
         {
             return "'" + paramValue.Replace("'", "''") + "'";
+        }
+
+        public virtual string GetSchemaName(string schema)
+        {
+            return NamingStrategy.GetSchemaName(schema);
         }
 
         public virtual string GetTableName(ModelDefinition modelDef)
@@ -440,26 +423,6 @@ namespace ServiceStack.OrmLite
             return StringBuilderCache.ReturnAndFree(sql);
         }
 
-        [Obsolete("Use GetColumnDefinition(fieldDef)")]
-        public string GetColumnDefinition(string fieldName, Type fieldType,
-            bool isPrimaryKey, bool autoIncrement, bool isNullable, bool isRowVersion,
-            int? fieldLength, int? scale, string defaultValue, string customFieldDefinition)
-        {
-            return GetColumnDefinition(new FieldDefinition
-            {
-                Name = fieldName,
-                FieldType = fieldType,
-                IsPrimaryKey = isPrimaryKey,
-                AutoIncrement = autoIncrement,
-                IsNullable = isNullable,
-                IsRowVersion = isRowVersion,
-                FieldLength = fieldLength,
-                Scale = scale,
-                DefaultValue = defaultValue,
-                CustomFieldDefinition = customFieldDefinition,
-            });
-        }
-
         public virtual string SelectIdentitySql { get; set; }
 
         public virtual long GetLastInsertId(IDbCommand dbCmd)
@@ -471,14 +434,12 @@ namespace ServiceStack.OrmLite
             return dbCmd.ExecLongScalar();
         }
 
-        public virtual long InsertAndGetLastInsertId<T>(IDbCommand dbCmd)
+        public virtual string GetLastInsertIdSqlSuffix<T>()
         {
             if (SelectIdentitySql == null)
                 throw new NotImplementedException("Returning last inserted identity is not implemented on this DB Provider.");
 
-            dbCmd.CommandText += "; " + SelectIdentitySql;
-
-            return dbCmd.ExecLongScalar();
+            return "; " + SelectIdentitySql;
         }
 
         // Fmt
@@ -490,7 +451,7 @@ namespace ServiceStack.OrmLite
                 && sqlFilter.TrimStart().StartsWith(SelectStatement, StringComparison.OrdinalIgnoreCase);
 
             if (isFullSelectStatement)
-                return sqlFilter.SqlFmt(filterParams);
+                return sqlFilter.SqlFmt(this, filterParams);
 
             var modelDef = tableType.GetModelDefinition();
             var sql = StringBuilderCache.Allocate();
@@ -499,7 +460,7 @@ namespace ServiceStack.OrmLite
             if (string.IsNullOrEmpty(sqlFilter))
                 return StringBuilderCache.ReturnAndFree(sql);
 
-            sqlFilter = sqlFilter.SqlFmt(filterParams);
+            sqlFilter = sqlFilter.SqlFmt(this, filterParams);
             if (!sqlFilter.StartsWith("ORDER ", StringComparison.OrdinalIgnoreCase)
                 && !sqlFilter.StartsWith("LIMIT ", StringComparison.OrdinalIgnoreCase))
             {
@@ -529,23 +490,16 @@ namespace ServiceStack.OrmLite
 
             if (offset != null || rows != null)
             {
-                sb.Append("\nLIMIT ");
-                if (offset == null)
-                {
-                    sb.Append(rows);
-                }
-                else
-                {
-                    sb.Append(rows.GetValueOrDefault(int.MaxValue)).Append(" OFFSET ").Append(offset);
-                }
+                sb.Append("\n");
+                sb.Append(SqlLimit(offset, rows));
             }
 
             return StringBuilderCache.ReturnAndFree(sb);
         }
 
-        public virtual SelectItem GetRowVersionColumnName(FieldDefinition field)
+        public virtual SelectItem GetRowVersionColumnName(FieldDefinition field, string tablePrefix = null)
         {
-            return new SelectItemColumn(this, field.FieldName);
+            return new SelectItemColumn(this, field.FieldName, null, tablePrefix);
         }
 
         public virtual string GetColumnNames(ModelDefinition modelDef)
@@ -568,7 +522,7 @@ namespace ServiceStack.OrmLite
                 }
                 else if (field.IsRowVersion)
                 {
-                    sqlColumns[i] = GetRowVersionColumnName(field);
+                    sqlColumns[i] = GetRowVersionColumnName(field, tablePrefix);
                 }
                 else
                 {
@@ -744,7 +698,10 @@ namespace ServiceStack.OrmLite
                 var quotedValue = dbParam.Value != null
                     ? GetQuotedValue(dbParam.Value, dbParam.Value.GetType())
                     : "null";
-                sql = Regex.Replace(sql, dbParam.ParameterName + @"(,|\s|\)|$)", quotedValue + "$1");
+
+                var pattern = dbParam.ParameterName + @"(,|\s|\)|$)";
+                var replacement = quotedValue.Replace("$", "$$") + "$1";
+                sql = Regex.Replace(sql, pattern, replacement);
             }
             return sql;
         }
@@ -794,7 +751,7 @@ namespace ServiceStack.OrmLite
                 }
                 catch (Exception ex)
                 {
-                    Log.Error("ERROR in PrepareParameterizedUpdateStatement(): " + ex.Message, ex);
+                    OrmLiteUtils.HandleException(ex, "ERROR in PrepareParameterizedUpdateStatement(): " + ex.Message);
                 }
             }
 
@@ -803,6 +760,10 @@ namespace ServiceStack.OrmLite
                 var strFilter = StringBuilderCacheAlt.ReturnAndFree(sqlFilter);
                 cmd.CommandText = $"UPDATE {GetQuotedTableName(modelDef)} " +
                                   $"SET {StringBuilderCache.ReturnAndFree(sql)} {(strFilter.Length > 0 ? "WHERE " + strFilter : "")}";
+            }
+            else
+            {
+                cmd.CommandText = "";
             }
 
             return hadRowVesion;
@@ -841,9 +802,7 @@ namespace ServiceStack.OrmLite
                 if (fieldDef.ShouldSkipDelete())
                     continue;
 
-                object fieldValue;
-
-                if (!deleteFields.TryGetValue(fieldDef.Name, out fieldValue))
+                if (!deleteFields.TryGetValue(fieldDef.Name, out var fieldValue))
                     continue;
 
                 if (fieldDef.IsRowVersion)
@@ -865,7 +824,7 @@ namespace ServiceStack.OrmLite
                 }
                 catch (Exception ex)
                 {
-                    Log.Error("ERROR in PrepareParameterizedDeleteStatement(): " + ex.Message, ex);
+                    OrmLiteUtils.HandleException(ex, "ERROR in PrepareParameterizedDeleteStatement(): " + ex.Message);
                 }
             }
 
@@ -901,20 +860,19 @@ namespace ServiceStack.OrmLite
 
             foreach (IDataParameter p in dbCmd.Parameters)
             {
-                FieldDefinition fieldDef;
                 var fieldName = this.ToFieldName(p.ParameterName);
-                fieldMap.TryGetValue(fieldName, out fieldDef);
+                fieldMap.TryGetValue(fieldName, out var fieldDef);
 
                 if (fieldDef == null)
                 {
-                    if (OrmLiteConfig.ParamNameFilter != null)
+                    if (ParamNameFilter != null)
                     {
                         fieldDef = modelDef.GetFieldDefinition(name => 
-                            string.Equals(OrmLiteConfig.ParamNameFilter(name), fieldName, StringComparison.OrdinalIgnoreCase));
+                            string.Equals(ParamNameFilter(name), fieldName, StringComparison.OrdinalIgnoreCase));
                     }
 
                     if (fieldDef == null)
-                        throw new ArgumentException("Field Definition '{0}' was not found".Fmt(fieldName));
+                        throw new ArgumentException($"Field Definition '{fieldName}' was not found");
                 }
 
                 SetParameterValue<T>(fieldDef, p, obj);
@@ -953,8 +911,7 @@ namespace ServiceStack.OrmLite
             }
             catch (Exception ex)
             {
-                Log.Error("Error in {0}.ToDbValue() for field '{1}' of Type '{2}' with value '{3}'"
-                    .Fmt(converter.GetType().Name, fieldDef.Name, fieldDef.FieldType, value.GetType().Name), ex);
+                Log.Error($"Error in {converter.GetType().Name}.ToDbValue() for field '{fieldDef.Name}' of Type '{fieldDef.FieldType}' with value '{value.GetType().Name}'", ex);
                 throw;
             }
         }
@@ -971,8 +928,7 @@ namespace ServiceStack.OrmLite
             }
             catch (Exception ex)
             {
-                Log.Error("Error in {0}.ToDbValue() for field of Type '{1}' with value '{2}'"
-                    .Fmt(converter.GetType().Name, fieldType, value.GetType().Name), ex);
+                Log.Error($"Error in {converter.GetType().Name}.ToDbValue() for field of Type '{fieldType}' with value '{value.GetType().Name}'", ex);
                 throw;
             }
         }
@@ -1004,16 +960,16 @@ namespace ServiceStack.OrmLite
             return unquotedVal;
         }
 
-        static readonly ConcurrentDictionary<string, PropertyGetterDelegate> anonValueFnMap =
-            new ConcurrentDictionary<string, PropertyGetterDelegate>();
+        static readonly ConcurrentDictionary<string, GetMemberDelegate> anonValueFnMap =
+            new ConcurrentDictionary<string, GetMemberDelegate>();
 
         protected virtual object GetAnonValue(FieldDefinition fieldDef, object obj)
         {
             var anonType = obj.GetType();
             var key = anonType.Name + "." + fieldDef.Name;
 
-            var factoryFn = (Func<string, PropertyGetterDelegate>)(_ =>
-                anonType.GetProperty(fieldDef.Name).GetPropertyGetterFn());
+            var factoryFn = (Func<string, GetMemberDelegate>)(_ =>
+                anonType.GetProperty(fieldDef.Name).CreateGetter());
 
             var getterFn = anonValueFnMap.GetOrAdd(key, factoryFn);
 
@@ -1060,7 +1016,7 @@ namespace ServiceStack.OrmLite
                 }
                 catch (Exception ex)
                 {
-                    Log.Error("ERROR in ToUpdateRowStatement(): " + ex.Message, ex);
+                    OrmLiteUtils.HandleException(ex, "ERROR in ToUpdateRowStatement(): " + ex.Message);
                 }
             }
 
@@ -1097,7 +1053,7 @@ namespace ServiceStack.OrmLite
                 }
                 catch (Exception ex)
                 {
-                    Log.Error("ERROR in PrepareUpdateRowStatement(cmd,args): " + ex.Message, ex);
+                    OrmLiteUtils.HandleException(ex, "ERROR in PrepareUpdateRowStatement(cmd,args): " + ex.Message);
                 }
             }
 
@@ -1148,7 +1104,7 @@ namespace ServiceStack.OrmLite
                 }
                 catch (Exception ex)
                 {
-                    Log.Error("ERROR in PrepareUpdateRowAddStatement(): " + ex.Message, ex);
+                    OrmLiteUtils.HandleException(ex, "ERROR in PrepareUpdateRowAddStatement(): " + ex.Message);
                 }
             }
 
@@ -1170,7 +1126,7 @@ namespace ServiceStack.OrmLite
                 && sqlFilter.Substring(0, deleteStatement.Length).ToUpper().Equals(deleteStatement);
 
             if (isFullDeleteStatement)
-                return sqlFilter.SqlFmt(filterParams);
+                return sqlFilter.SqlFmt(this, filterParams);
 
             var modelDef = tableType.GetModelDefinition();
             sql.Append($"DELETE FROM {GetQuotedTableName(modelDef)}");
@@ -1178,7 +1134,7 @@ namespace ServiceStack.OrmLite
             if (string.IsNullOrEmpty(sqlFilter))
                 return StringBuilderCache.ReturnAndFree(sql);
 
-            sqlFilter = sqlFilter.SqlFmt(filterParams);
+            sqlFilter = sqlFilter.SqlFmt(this, filterParams);
             sql.Append(" WHERE ");
             sql.Append(sqlFilter);
 
@@ -1201,8 +1157,7 @@ namespace ServiceStack.OrmLite
             if (!defaultValue.StartsWith("{"))
                 return defaultValue;
 
-            string variable;
-            return Variables.TryGetValue(defaultValue, out variable)
+            return Variables.TryGetValue(defaultValue, out var variable)
                 ? variable
                 : null;
         }
@@ -1228,6 +1183,12 @@ namespace ServiceStack.OrmLite
 
                 sbColumns.Append(columnDefinition);
 
+                var sqlConstraint = GetCheckConstraint(fieldDef);
+                if (sqlConstraint != null)
+                {
+                    sbConstraints.Append(",\n" + sqlConstraint);
+                }
+
                 if (fieldDef.ForeignKey == null || OrmLiteConfig.SkipForeignKeys)
                     continue;
 
@@ -1244,6 +1205,14 @@ namespace ServiceStack.OrmLite
                       $"\n(\n  {StringBuilderCache.ReturnAndFree(sbColumns)}{StringBuilderCacheAlt.ReturnAndFree(sbConstraints)} \n); \n";
 
             return sql;
+        }
+
+        public virtual string GetCheckConstraint(FieldDefinition fieldDef)
+        {
+            if (fieldDef.CheckConstraint == null)
+                return null;
+
+            return $"CONSTRAINT CHK_{fieldDef.FieldName} CHECK ({fieldDef.CheckConstraint})";
         }
 
         public virtual string ToPostCreateTableStatement(ModelDefinition modelDef)
@@ -1426,19 +1395,19 @@ namespace ServiceStack.OrmLite
         public virtual string ToAddColumnStatement(Type modelType, FieldDefinition fieldDef)
         {
             var column = GetColumnDefinition(fieldDef);
-            return $"ALTER TABLE {GetQuotedTableName(modelType.GetModelDefinition().ModelName)} ADD COLUMN {column};";
+            return $"ALTER TABLE {GetQuotedTableName(modelType.GetModelDefinition())} ADD COLUMN {column};";
         }
 
         public virtual string ToAlterColumnStatement(Type modelType, FieldDefinition fieldDef)
         {
             var column = GetColumnDefinition(fieldDef);
-            return $"ALTER TABLE {GetQuotedTableName(modelType.GetModelDefinition().ModelName)} MODIFY COLUMN {column};";
+            return $"ALTER TABLE {GetQuotedTableName(modelType.GetModelDefinition())} MODIFY COLUMN {column};";
         }
 
         public virtual string ToChangeColumnNameStatement(Type modelType, FieldDefinition fieldDef, string oldColumnName)
         {
             var column = GetColumnDefinition(fieldDef);
-            return $"ALTER TABLE {GetQuotedTableName(modelType.GetModelDefinition().ModelName)} CHANGE COLUMN {GetQuotedColumnName(oldColumnName)} {column};";
+            return $"ALTER TABLE {GetQuotedTableName(modelType.GetModelDefinition())} CHANGE COLUMN {GetQuotedColumnName(oldColumnName)} {column};";
         }
 
         public virtual string ToAddForeignKeyStatement<T, TForeign>(Expression<Func<T, object>> field,
@@ -1457,9 +1426,9 @@ namespace ServiceStack.OrmLite
                 "fk_" + sourceMD.ModelName + "_" + fieldName + "_" + referenceFieldName :
                 foreignKeyName);
 
-            return $"ALTER TABLE {GetQuotedTableName(sourceMD.ModelName)} " +
+            return $"ALTER TABLE {GetQuotedTableName(sourceMD)} " +
                    $"ADD CONSTRAINT {name} FOREIGN KEY ({GetQuotedColumnName(fieldName)}) " +
-                   $"REFERENCES {GetQuotedTableName(referenceMD.ModelName)} " +
+                   $"REFERENCES {GetQuotedTableName(referenceMD)} " +
                    $"({GetQuotedColumnName(referenceFieldName)})" +
                    $"{GetForeignKeyOnDeleteClause(new ForeignKeyConstraint(typeof(T), onDelete: FkOptionToString(onDelete)))}" +
                    $"{GetForeignKeyOnUpdateClause(new ForeignKeyConstraint(typeof(T), onUpdate: FkOptionToString(onUpdate)))};";
@@ -1475,7 +1444,7 @@ namespace ServiceStack.OrmLite
                 indexName);
 
             string command = $"CREATE {(unique ? "UNIQUE" : "")} " +
-                             $"INDEX {name} ON {GetQuotedTableName(sourceDef.ModelName)}" +
+                             $"INDEX {name} ON {GetQuotedTableName(sourceDef)}" +
                              $"({GetQuotedColumnName(fieldName)});";
             return command;
         }
@@ -1498,7 +1467,7 @@ namespace ServiceStack.OrmLite
         {
             if (value == null) return "NULL";
 
-            var converter = value.GetType().IsEnum()
+            var converter = value.GetType().IsEnum
                 ? EnumConverter
                 : GetConverterBestMatch(fieldType);
             try
@@ -1507,8 +1476,7 @@ namespace ServiceStack.OrmLite
             }
             catch (Exception ex)
             {
-                Log.Error("Error in {0}.ToQuotedString() value '{0}' and Type '{1}'"
-                    .Fmt(converter.GetType().Name, value.GetType().Name, fieldType.Name), ex);
+                Log.Error($"Error in {converter.GetType().Name}.ToQuotedString() value '{converter.GetType().Name}' and Type '{value.GetType().Name}'", ex);
                 throw;
             }
         }
@@ -1538,7 +1506,7 @@ namespace ServiceStack.OrmLite
 
         public virtual string ToRowCountStatement(string innerSql)
         {
-            return "SELECT COUNT(*) FROM ({0}) AS COUNT".Fmt(innerSql);
+            return $"SELECT COUNT(*) FROM ({innerSql}) AS COUNT";
         }
 
         public virtual void DropColumn(IDbConnection db, Type modelType, string columnName)
@@ -1551,9 +1519,23 @@ namespace ServiceStack.OrmLite
 
         protected virtual string ToDropColumnStatement(Type modelType, string columnName, IOrmLiteDialectProvider provider)
         {
-            return $"ALTER TABLE {provider.GetQuotedTableName(modelType.GetModelDefinition().ModelName)} " +
+            return $"ALTER TABLE {provider.GetQuotedTableName(modelType.GetModelDefinition())} " +
                    $"DROP COLUMN {provider.GetQuotedColumnName(columnName)};";
         }
+
+        public virtual string SqlConcat(IEnumerable<object> args) => $"CONCAT({string.Join(", ", args)})";
+
+        public virtual string SqlCurrency(string fieldOrValue) => SqlCurrency(fieldOrValue, "$");
+
+        public virtual string SqlCurrency(string fieldOrValue, string currencySymbol) => SqlConcat(new List<string> { currencySymbol, fieldOrValue });
+
+        public virtual string SqlBool(bool value) => value ? "true" : "false";
+
+        public virtual string SqlLimit(int? offset = null, int? rows = null) => rows == null && offset == null
+            ? "" 
+            : offset == null
+                ? "LIMIT " + rows
+                : "LIMIT " + rows.GetValueOrDefault(int.MaxValue) + " OFFSET " + offset;
 
         //Async API's, should be overrided by Dialect Providers to use .ConfigureAwait(false)
         //Default impl below uses TaskAwaiter shim in async.cs

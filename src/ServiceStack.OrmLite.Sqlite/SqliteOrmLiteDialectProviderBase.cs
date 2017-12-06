@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Reflection;
-using System.Text;
 using ServiceStack.OrmLite.Sqlite.Converters;
 using ServiceStack.Text;
 
@@ -17,13 +16,17 @@ namespace ServiceStack.OrmLite.Sqlite
 
             base.InitColumnTypeMap();
 
+            OrmLiteConfig.DeoptimizeReader = true;
+            base.RegisterConverter<DateTime>(new SqliteSystemDataDateTimeConverter());
+            //Old behavior using native sqlite3.dll
+            //base.RegisterConverter<DateTime>(new SqliteNativeDateTimeConverter());
+
             base.RegisterConverter<string>(new SqliteStringConverter());
-            base.RegisterConverter<DateTime>(new SqliteDateTimeConverter());
             base.RegisterConverter<DateTimeOffset>(new SqliteDateTimeOffsetConverter());
             base.RegisterConverter<Guid>(new SqliteGuidConverter());
             base.RegisterConverter<bool>(new SqliteBoolConverter());
             base.RegisterConverter<byte[]>(new SqliteByteArrayConverter());
-#if NETSTANDARD1_3            
+#if NETSTANDARD2_0            
             base.RegisterConverter<char>(new SqliteCharConverter());
 #endif
             this.Variables = new Dictionary<string, string>
@@ -43,7 +46,7 @@ namespace ServiceStack.OrmLite.Sqlite
             if (modelDef.RowVersion != null)
             {
                 var triggerName = GetTriggerName(modelDef);
-                return "DROP TRIGGER IF EXISTS {0}".Fmt(GetQuotedName(triggerName));
+                return $"DROP TRIGGER IF EXISTS {GetQuotedName(triggerName)}";
             }
 
             return null;
@@ -60,13 +63,12 @@ namespace ServiceStack.OrmLite.Sqlite
             {
                 var triggerName = GetTriggerName(modelDef);
                 var tableName = GetTableName(modelDef);
-                var triggerBody = "UPDATE {0} SET {1} = OLD.{1} + 1 WHERE {2} = NEW.{2};".Fmt(
+                var triggerBody = string.Format("UPDATE {0} SET {1} = OLD.{1} + 1 WHERE {2} = NEW.{2};",
                     tableName, 
                     modelDef.RowVersion.FieldName.SqlColumn(this), 
                     modelDef.PrimaryKey.FieldName.SqlColumn(this));
 
-                var sql = "CREATE TRIGGER {0} BEFORE UPDATE ON {1} FOR EACH ROW BEGIN {2} END;".Fmt(
-                    triggerName, tableName, triggerBody);
+                var sql = $"CREATE TRIGGER {triggerName} BEFORE UPDATE ON {tableName} FOR EACH ROW BEGIN {triggerBody} END;";
 
                 return sql;
             }
@@ -80,14 +82,14 @@ namespace ServiceStack.OrmLite.Sqlite
             foreach (var propertyInfo in objectWithProperties.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 var columnDefinition = (sbColumns.Length == 0)
-                    ? string.Format("{0} TEXT PRIMARY KEY", propertyInfo.Name)
-                    : string.Format(", {0} TEXT", propertyInfo.Name);
+                    ? $"{propertyInfo.Name} TEXT PRIMARY KEY"
+                    : $", {propertyInfo.Name} TEXT";
 
                 sbColumns.AppendLine(columnDefinition);
             }
 
             var tableName = objectWithProperties.GetType().Name;
-            var sql = string.Format("CREATE VIRTUAL TABLE \"{0}\" USING FTS3 ({1});", tableName, StringBuilderCache.ReturnAndFree(sbColumns));
+            var sql = $"CREATE VIRTUAL TABLE \"{tableName}\" USING FTS3 ({StringBuilderCache.ReturnAndFree(sbColumns)});";
 
             return sql;
         }
@@ -106,7 +108,7 @@ namespace ServiceStack.OrmLite.Sqlite
                         Directory.CreateDirectory(existingDir);
                     }
                 }
-#if NETSTANDARD1_3
+#if NETSTANDARD2_0
                 connString.AppendFormat(@"Data Source={0};", connectionString.Trim());
 #else
                 connString.AppendFormat(@"Data Source={0};Version=3;New=True;Compress=True;", connectionString.Trim());
@@ -137,6 +139,13 @@ namespace ServiceStack.OrmLite.Sqlite
         }
 
         protected abstract IDbConnection CreateConnection(string connectionString);
+
+        public override string GetSchemaName(string schema)
+        {
+            return schema != null
+                ? NamingStrategy.GetSchemaName(schema).Replace(".", "_")
+                : NamingStrategy.GetSchemaName(schema);
+        }
 
         public override string GetTableName(string table, string schema=null)
         {
@@ -194,6 +203,12 @@ namespace ServiceStack.OrmLite.Sqlite
 
             return ret;
         }
+
+        public override string SqlConcat(IEnumerable<object> args) => string.Join(" || ", args);
+
+        public override string SqlCurrency(string fieldOrValue, string currencySymbol) => SqlConcat(new []{ "'" + currencySymbol + "'", "printf(\"%.2f\", " + fieldOrValue + ")" });
+
+        public override string SqlBool(bool value) => value ? "1" : "0";
     }
 
     public static class SqliteExtensions

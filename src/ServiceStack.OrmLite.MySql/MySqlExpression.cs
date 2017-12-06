@@ -1,17 +1,9 @@
-﻿using System.Collections.Generic;
-using System.Linq.Expressions;
-
-namespace ServiceStack.OrmLite.MySql
+﻿namespace ServiceStack.OrmLite.MySql
 {
     public class MySqlExpression<T> : SqlExpression<T>
     {
         public MySqlExpression(IOrmLiteDialectProvider dialectProvider)
             : base(dialectProvider) {}
-
-        protected override PartialSqlString ToConcatPartialString(List<object> args)
-        {
-            return new PartialSqlString($"CONCAT({string.Join(", ", args)})");
-        }
 
         protected override string ToCast(string quotedColName)
         {
@@ -23,6 +15,11 @@ namespace ServiceStack.OrmLite.MySql
             return base.tableDefs.Count > 1
                 ? $"DELETE {DialectProvider.GetQuotedTableName(modelDef)} {FromExpression} {WhereExpression}"
                 : base.ToDeleteRowStatement();
+        }
+
+        protected override string CreateInSubQuerySql(object quotedColName, string subSelect)
+        {
+            return $"{quotedColName} IN (SELECT * FROM ({subSelect})  SubQuery)";
         }
     }
 }

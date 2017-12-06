@@ -54,11 +54,13 @@ namespace ServiceStack.OrmLite
 
         public string DefaultValue { get; set; }
 
+        public string CheckConstraint { get; set; }
+
         public ForeignKeyConstraint ForeignKey { get; set; }
 
-        public PropertyGetterDelegate GetValueFn { get; set; }
+        public GetMemberDelegate GetValueFn { get; set; }
 
-        public PropertySetterDelegate SetValueFn { get; set; }
+        public SetMemberDelegate SetValueFn { get; set; }
 
         public object GetValue(object onInstance)
         {
@@ -94,25 +96,17 @@ namespace ServiceStack.OrmLite
 
         public bool IsRefType { get; set; }
 
-        public override string ToString()
-        {
-            return Name;
-        }
+        public bool IgnoreOnUpdate { get; set; }
 
-        public bool ShouldSkipInsert()
-        {
-            return AutoIncrement || IsComputed || IsRowVersion;
-        }
+        public bool IgnoreOnInsert { get; set; }
+        
+        public override string ToString() => Name;
 
-        public bool ShouldSkipUpdate()
-        {
-            return IsComputed;
-        }
+        public bool ShouldSkipInsert() => IgnoreOnInsert || AutoIncrement || IsComputed || IsRowVersion;
 
-        public bool ShouldSkipDelete()
-        {
-            return IsComputed;
-        }
+        public bool ShouldSkipUpdate() => IgnoreOnUpdate || IsComputed;
+
+        public bool ShouldSkipDelete() => IsComputed;
 
         public bool IsSelfRefField(FieldDefinition fieldDef)
         {

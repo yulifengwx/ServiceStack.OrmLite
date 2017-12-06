@@ -252,13 +252,13 @@ namespace ServiceStack.OrmLite
 
         internal static Task<int> DeleteAsync<T>(this IDbCommand dbCmd, string sql, object anonType, CancellationToken token)
         {
-            if (anonType != null) dbCmd.SetParameters<T>(anonType, excludeDefaults: false);
+            if (anonType != null) dbCmd.SetParameters<T>(anonType, excludeDefaults: false, sql: ref sql);
             return dbCmd.ExecuteSqlAsync(dbCmd.GetDialectProvider().ToDeleteStatement(typeof(T), sql), token);
         }
 
         internal static Task<int> DeleteAsync(this IDbCommand dbCmd, Type tableType, string sql, object anonType, CancellationToken token)
         {
-            if (anonType != null) dbCmd.SetParameters(tableType, anonType, excludeDefaults: false);
+            if (anonType != null) dbCmd.SetParameters(tableType, anonType, excludeDefaults: false, sql: ref sql);
             return dbCmd.ExecuteSqlAsync(dbCmd.GetDialectProvider().ToDeleteStatement(tableType, sql), token);
         }
 
@@ -403,8 +403,7 @@ namespace ServiceStack.OrmLite
                         }
                         else
                         {
-                            if (OrmLiteConfig.InsertFilter != null)
-                                OrmLiteConfig.InsertFilter(dbCmd, row);
+                            OrmLiteConfig.InsertFilter?.Invoke(dbCmd, row);
 
                             await dbCmd.InsertAsync(token, row);
                         }
@@ -436,7 +435,7 @@ namespace ServiceStack.OrmLite
                 var listInterface = fieldDef.FieldType.GetTypeWithGenericInterfaceOf(typeof(IList<>));
                 if (listInterface != null)
                 {
-                    var refType = listInterface.GenericTypeArguments()[0];
+                    var refType = listInterface.GetGenericArguments()[0];
                     var refModelDef = refType.GetModelDefinition();
 
                     var refField = modelDef.GetRefFieldDef(refModelDef, refType);
@@ -524,11 +523,11 @@ namespace ServiceStack.OrmLite
             return dbCommand.ExecuteSqlAsync(sql, token);
         }
 
-        internal static Task<ulong> GetRowVersionAsync(this IDbCommand dbCmd, ModelDefinition modelDef, object id, CancellationToken token)
+        internal static Task<object> GetRowVersionAsync(this IDbCommand dbCmd, ModelDefinition modelDef, object id, CancellationToken token)
         {
             var sql = dbCmd.RowVersionSql(modelDef, id);
-            return dbCmd.ScalarAsync<ulong>(sql, token)
-                .Success(x => dbCmd.GetDialectProvider().FromDbRowVersion(x));
+            return dbCmd.ScalarAsync<object>(sql, token)
+                .Success(x => dbCmd.GetDialectProvider().FromDbRowVersion(modelDef.RowVersion.FieldType, x));
         }
     }
 }

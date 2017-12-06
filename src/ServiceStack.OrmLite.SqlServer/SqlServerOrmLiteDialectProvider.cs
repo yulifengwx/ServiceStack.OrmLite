@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 using ServiceStack.DataAnnotations;
 using ServiceStack.OrmLite.SqlServer.Converters;
 using ServiceStack.Text;
-#if NETSTANDARD1_3
+#if NETSTANDARD2_0
 using ApplicationException = System.InvalidOperationException;
 #endif
 
@@ -93,20 +93,6 @@ namespace ServiceStack.OrmLite.SqlServer
             return new SqlConnection(connectionString);
         }
 
-        [Obsolete("Use SqlServerDialect.Provider.RegisterConverter<DateTime>(new SqlServerDateTime2Converter());")]
-        public void UseDatetime2(bool shouldUseDatetime2)
-        {
-            RegisterConverter<DateTime>(shouldUseDatetime2
-                ? new SqlServerDateTime2Converter()
-                : new SqlServerDateTimeConverter());
-        }
-
-        [Obsolete("Use GetDateTimeConverter().DateStyle = DateTimeKind.Utc")]
-        public void EnsureUtc(bool shouldEnsureUtc)
-        {
-            this.GetDateTimeConverter().DateStyle = DateTimeKind.Utc;
-        }
-
         public override SqlExpression<T> SqlExpression<T>() => new SqlServerExpression<T>(this);
 
         public override IDbDataParameter CreateParam() => new SqlParameter();
@@ -114,10 +100,10 @@ namespace ServiceStack.OrmLite.SqlServer
         public override bool DoesTableExist(IDbCommand dbCmd, string tableName, string schema = null)
         {
             var sql = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = {0}"
-                .SqlFmt(tableName);
+                .SqlFmt(this, tableName);
 
             if (schema != null)
-                sql += " AND TABLE_SCHEMA = {0}".SqlFmt(schema);
+                sql += " AND TABLE_SCHEMA = {0}".SqlFmt(this, schema);
 
             var result = dbCmd.ExecLongScalar(sql);
 
@@ -127,7 +113,7 @@ namespace ServiceStack.OrmLite.SqlServer
         public override bool DoesColumnExist(IDbConnection db, string columnName, string tableName, string schema = null)
         {
             var sql = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @tableName AND COLUMN_NAME = @columnName"
-                .SqlFmt(tableName, columnName);
+                .SqlFmt(this, tableName, columnName);
 
             if (schema != null)
                 sql += " AND TABLE_SCHEMA = @schema";
@@ -180,7 +166,7 @@ namespace ServiceStack.OrmLite.SqlServer
         public override string ToAddColumnStatement(Type modelType, FieldDefinition fieldDef)
         {
             var column = GetColumnDefinition(fieldDef);
-            var modelName = GetQuotedTableName(GetModel(modelType).ModelName);
+            var modelName = GetQuotedTableName(GetModel(modelType));
 
             return $"ALTER TABLE {modelName} ADD {column};";
         }
@@ -188,14 +174,14 @@ namespace ServiceStack.OrmLite.SqlServer
         public override string ToAlterColumnStatement(Type modelType, FieldDefinition fieldDef)
         {
             var column = GetColumnDefinition(fieldDef);
-            var modelName = GetQuotedTableName(GetModel(modelType).ModelName);
+            var modelName = GetQuotedTableName(GetModel(modelType));
 
             return $"ALTER TABLE {modelName} ALTER COLUMN {column};";
         }
 
         public override string ToChangeColumnNameStatement(Type modelType, FieldDefinition fieldDef, string oldColumnName)
         {
-            var modelName = NamingStrategy.GetTableName(GetModel(modelType).ModelName);
+            var modelName = NamingStrategy.GetTableName(GetModel(modelType));
             var objectName = $"{modelName}.{oldColumnName}";
 
             return $"EXEC sp_rename {GetQuotedValue(objectName)}, {GetQuotedValue(fieldDef.FieldName)}, {GetQuotedValue("COLUMN")};";
@@ -265,8 +251,8 @@ namespace ServiceStack.OrmLite.SqlServer
             if (rows.HasValue && rows.Value < 0)
                 throw new ArgumentException($"Rows value:'{rows.Value}' must be>=0");
 
-            var skip = offset.HasValue ? offset.Value : 0;
-            var take = rows.HasValue ? rows.Value : int.MaxValue;
+            var skip = offset ?? 0;
+            var take = rows ?? int.MaxValue;
 
             var selectType = selectExpression.StartsWithIgnoreCase("SELECT DISTINCT") ? "SELECT DISTINCT" : "SELECT";
 
@@ -354,6 +340,17 @@ namespace ServiceStack.OrmLite.SqlServer
 
             return base.GetLoadChildrenSubSelect(expr);
         }
+
+        public override string SqlCurrency(string fieldOrValue, string currencySymbol) => 
+            SqlConcat(new[] { "'" + currencySymbol + "'", $"CONVERT(VARCHAR, CONVERT(MONEY, {fieldOrValue}), 1)" });
+
+        public override string SqlBool(bool value) => value ? "1" : "0";
+
+        public override string SqlLimit(int? offset = null, int? rows = null) => rows == null && offset == null
+            ? ""
+            : rows != null
+                ? "OFFSET " + offset.GetValueOrDefault() + " ROWS FETCH NEXT " + rows + " ROWS ONLY"
+                : "OFFSET " + offset.GetValueOrDefault(int.MaxValue) + " ROWS";
 
         protected SqlConnection Unwrap(IDbConnection db) => (SqlConnection)db.ToDbConnection();
 

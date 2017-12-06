@@ -8,10 +8,10 @@ using ServiceStack.DataAnnotations;
 
 namespace ServiceStack.OrmLite.SqlServerTests.UseCase
 {
-    [TestFixture, NUnit.Framework.Ignore]
+    [TestFixture, NUnit.Framework.Ignore("")]
     public class SimpleUseCase
     {
-        [TestFixtureSetUp]
+        [OneTimeSetUp]
         public void TestFixtureSetUp()
         {
             //Inject your database provider here

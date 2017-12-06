@@ -20,8 +20,8 @@ namespace ServiceStack.OrmLite.Converters
         protected string maxColumnDefinition;
         public virtual string MaxColumnDefinition
         {
-            get { return maxColumnDefinition ?? ColumnDefinition; }
-            set { maxColumnDefinition = value; }
+            get => maxColumnDefinition ?? ColumnDefinition;
+            set => maxColumnDefinition = value;
         }
 
         public override string ColumnDefinition => GetColumnDefinition(StringLength);
@@ -32,14 +32,13 @@ namespace ServiceStack.OrmLite.Converters
                 return MaxColumnDefinition;
 
             return UseUnicode
-                ? "NVARCHAR({0})".Fmt(stringLength.GetValueOrDefault(StringLength))
-                : "VARCHAR({0})".Fmt(stringLength.GetValueOrDefault(StringLength));
+                ? $"NVARCHAR({stringLength.GetValueOrDefault(StringLength)})"
+                : $"VARCHAR({stringLength.GetValueOrDefault(StringLength)})";
         }
 
         public override object FromDbValue(Type fieldType, object value)
         {
-            var strValue = value as string;
-            if (strValue != null)
+            if (value is string strValue)
             {
                 if (OrmLiteConfig.StringFilter != null)
                     return OrmLiteConfig.StringFilter(strValue);
@@ -65,8 +64,7 @@ namespace ServiceStack.OrmLite.Converters
             if (value is char)
                 return value;
 
-            var strValue = value as string;
-            if (strValue != null)
+            if (value is string strValue)
                 return strValue[0];
 
             if (value.GetType().IsIntegerType())
@@ -92,8 +90,7 @@ namespace ServiceStack.OrmLite.Converters
             if (value is char[])
                 return value;
 
-            var strValue = value as string;
-            if (strValue != null)
+            if (value is string strValue)
                 return strValue.ToCharArray();
 
             return (char[])value;

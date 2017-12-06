@@ -23,6 +23,12 @@ namespace ServiceStack.OrmLite
     {
         void RegisterConverter<T>(IOrmLiteConverter converter);
 
+        /// <summary>
+        /// Invoked when a DB Connection is opened
+        /// </summary>
+        Action<IDbConnection> OnOpenConnection { get; set; } 
+            
+
         IOrmLiteExecFilter ExecFilter { get; set; }
 
         /// <summary>
@@ -39,17 +45,13 @@ namespace ServiceStack.OrmLite
 
         string ParamString { get; set; }
 
-        [Obsolete("Use GetStringConverter().UseUnicode")]
-        bool UseUnicode { get; set; }
-
-        [Obsolete("Use GetStringConverter().StringLength")]
-        int DefaultStringLength { get; set; }
-
         string EscapeWildcards(string value);
 
         INamingStrategy NamingStrategy { get; set; }
 
         IStringSerializer StringSerializer { get; set; }
+
+        Func<string, string> ParamNameFilter { get; set; }
 
         /// <summary>
         /// Quote the string so that it can be used inside an SQL-expression
@@ -75,6 +77,10 @@ namespace ServiceStack.OrmLite
 
         IDbConnection CreateConnection(string filePath, Dictionary<string, string> options);
 
+        string GetTableName(ModelDefinition modelDef);
+
+        string GetTableName(string tableName, string schema = null);
+
         string GetQuotedTableName(ModelDefinition modelDef);
 
         string GetQuotedTableName(string tableName, string schema=null);
@@ -89,7 +95,7 @@ namespace ServiceStack.OrmLite
 
         long GetLastInsertId(IDbCommand command);
 
-        long InsertAndGetLastInsertId<T>(IDbCommand dbCmd);
+        string GetLastInsertIdSqlSuffix<T>();
 
         string ToSelectStatement(Type tableType, string sqlFilter, params object[] filterParams);
 
@@ -155,16 +161,14 @@ namespace ServiceStack.OrmLite
 
         void DropColumn(IDbConnection db, Type modelType, string columnName);
 
-        ulong FromDbRowVersion(object value);
-        SelectItem GetRowVersionColumnName(FieldDefinition field);
+        object FromDbRowVersion(Type fieldType,  object value);
+
+        SelectItem GetRowVersionColumnName(FieldDefinition field, string tablePrefix = null);
 
         string GetColumnNames(ModelDefinition modelDef);
         SelectItem[] GetColumnNames(ModelDefinition modelDef, bool tableQualified);
 
         SqlExpression<T> SqlExpression<T>();
-
-        [Obsolete("Use InitDbParam")]
-        DbType GetColumnDbType(Type columnType);
 
         IDbDataParameter CreateParam();
 
@@ -202,5 +206,11 @@ namespace ServiceStack.OrmLite
         string ToUpdateStatement<T>(IDbCommand dbCmd, T item, ICollection<string> updateFields = null);
         string ToInsertStatement<T>(IDbCommand dbCmd, T item, ICollection<string> insertFields = null);
         string MergeParamsIntoSql(string sql, IEnumerable<IDbDataParameter> dbParams);
+
+        string SqlConcat(IEnumerable<object> args);
+        string SqlCurrency(string fieldOrValue);
+        string SqlCurrency(string fieldOrValue, string currencySymbol);
+        string SqlBool(bool value);
+        string SqlLimit(int? offset = null, int? rows = null);
     }
 }

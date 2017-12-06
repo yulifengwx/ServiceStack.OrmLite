@@ -552,6 +552,79 @@ namespace ServiceStack.OrmLite.Tests
             Assert.That(target.Count, Is.EqualTo(1));
         }
 
+        [Test]
+        public void Can_Where_using_SqlIn_filter()
+        {
+            var subQ = Db.From<TestType>().Where(x=>x.NullableIntCol == 10).Select(x=>x.Id);
+            var q = Db.From<TestType>();
+            q.PrefixFieldWithTableName = true;
+            q.Where(x=>Sql.In(x.Id, subQ));
+
+            var target = Db.Select(q);
+            Assert.That(target.Count, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Can_Where_using_IfConcat_filter()
+        {
+            System.Linq.Expressions.Expression<Func<TestType, bool>> filter = x => (String.Concat("Text: ", x.TextCol) == null ? null : String.Concat("Text: ", x.TextCol)).EndsWith("asdf");
+            var q = Db.From<TestType>().Where(filter);
+            Assert.That(q.ToSelectStatement().ToLower(), Does.Contain("text"));
+
+            var target = Db.Select(q);
+            Assert.That(target.Count, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Can_Where_using_IfWithStringConstant_filter()
+        {
+            System.Linq.Expressions.Expression<Func<TestType, bool>> filter = x => (String.Concat("Text: ", x.TextCol) == null ? " " : String.Concat("Text: ", x.TextCol)).EndsWith("asdf");
+            var q = Db.From<TestType>().Where(filter);
+            Assert.That(q.ToSelectStatement().ToLower(), Does.Contain("text"));
+
+            var target = Db.Select(q);
+            Assert.That(target.Count, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Can_OrderBy_using_isnull()
+        {
+            System.Linq.Expressions.Expression<Func<TestType, object>> orderBy = x => x.TextCol == null ? x.TextCol : x.NullableIntCol.ToString();
+            var q = Db.From<TestType>().OrderBy(orderBy);
+            Assert.That(q.ToSelectStatement().ToLower(), Does.Not.Contain("isnull"));
+
+            var target = Db.Select(q);
+            Assert.IsTrue(target.Count > 0);
+        }
+
+        [Test]
+        public void Can_Where_using_Convert()
+        {
+            var paramExpr = System.Linq.Expressions.Expression.Parameter(typeof(TestType));
+            var propExpr = System.Linq.Expressions.Expression.Property(paramExpr, nameof(TestType.TextCol));
+            var convert = System.Linq.Expressions.Expression.Convert(propExpr, typeof(object));
+            var methodToString = typeof(object).GetMethod(nameof(ToString));
+            var toString = System.Linq.Expressions.Expression.Call(convert, methodToString);
+            var equal = System.Linq.Expressions.Expression.Equal(toString, System.Linq.Expressions.Expression.Constant("asdf"));
+            var lambda = System.Linq.Expressions.Expression.Lambda<System.Func<TestType, bool>>(equal, paramExpr);
+
+            var q = Db.From<TestType>().Where(lambda);
+
+            var target = Db.Select(q);
+            Assert.That(target.Count, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Can_Where_using_filter_with_Compare()
+        {
+            string filterText = "asdf";
+
+            System.Linq.Expressions.Expression<Func<TestType, bool>> filter = x => String.Compare(x.TextCol, filterText) == 0;
+            var q = Db.From<TestType>().Where(filter);
+            var target = Db.Select(q);
+            Assert.That(target.Count, Is.EqualTo(1));
+        }
+
         private int MethodReturningInt(int val)
         {
             return val;

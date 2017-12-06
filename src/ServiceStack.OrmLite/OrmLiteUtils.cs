@@ -22,6 +22,7 @@ using System.Text.RegularExpressions;
 using ServiceStack.Logging;
 using ServiceStack.Text;
 using ServiceStack.OrmLite.Dapper;
+using ServiceStack.Reflection;
 
 namespace ServiceStack.OrmLite
 {
@@ -34,6 +35,23 @@ namespace ServiceStack.OrmLite
         const int maxCachedIndexFields = 10000;
         private static Dictionary<IndexFieldsCacheKey, Tuple<FieldDefinition, int, IOrmLiteConverter>[]> indexFieldsCache 
             = new Dictionary<IndexFieldsCacheKey, Tuple<FieldDefinition, int, IOrmLiteConverter>[]>(maxCachedIndexFields);
+
+        private static readonly ILog Log = LogManager.GetLogger(typeof(OrmLiteUtils));
+
+        public static void HandleException(Exception ex, string message = null)
+        {
+            if (OrmLiteConfig.ThrowOnError)
+                throw ex;
+
+            if (message != null)
+            {
+                Log.Error(message, ex);
+            }
+            else
+            {
+                Log.Error(ex);
+            }
+        }
 
         public static void DebugCommand(this ILog log, IDbCommand cmd)
         {
@@ -65,7 +83,8 @@ namespace ServiceStack.OrmLite
 
         public static bool IsScalar<T>()
         {
-            return typeof(T).IsValueType() || typeof(T) == typeof(string);
+            var isScalar = typeof(T).IsValueType && !typeof(T).Name.StartsWith("ValueTuple`", StringComparison.Ordinal) || typeof(T) == typeof(string);
+            return isScalar;
         }
 
         public static T ConvertTo<T>(this IDataReader reader, IOrmLiteDialectProvider dialectProvider, HashSet<string> onlyFields=null)
@@ -79,10 +98,14 @@ namespace ServiceStack.OrmLite
 
                     if (typeof(T) == typeof(Dictionary<string, object>))
                         return (T)(object)reader.ConvertToDictionaryObjects();
-                    
+
+                    var values = new object[reader.FieldCount];
+
+                    if (typeof(T).Name.StartsWith("ValueTuple`"))
+                        return reader.ConvertToValueTuple<T>(values, dialectProvider);
+
                     var row = CreateInstance<T>();
                     var indexCache = reader.GetIndexFieldsCache(ModelDefinition<T>.Definition, dialectProvider, onlyFields: onlyFields);
-                    var values = new object[reader.FieldCount];
                     row.PopulateWithSqlReader(dialectProvider, reader, indexCache, values);
                     return row;
                 }
@@ -121,6 +144,41 @@ namespace ServiceStack.OrmLite
                 row[dataReader.GetName(i).Trim()] = dbValue is DBNull ? null : dbValue;
             }
             return row;
+        }
+
+        public static T ConvertToValueTuple<T>(this IDataReader reader, object[] values, IOrmLiteDialectProvider dialectProvider)
+        {
+            var row = typeof(T).CreateInstance();
+            var typeFields = TypeFields.Get(typeof(T));
+
+            values = reader.PopulateValues(values, dialectProvider);
+
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                var itemName = "Item" + (i + 1);
+                var field = typeFields.GetAccessor(itemName);
+                if (field == null) break;
+
+                var dbValue = values != null
+                    ? values[i]
+                    : reader.GetValue(i);
+
+                if (dbValue == null)
+                    continue;
+
+                var fieldType = field.FieldInfo.FieldType;
+                if (dbValue.GetType() == fieldType)
+                {
+                    field.PublicSetterRef(ref row, dbValue);
+                }
+                else
+                {
+                    var converter = dialectProvider.GetConverter(fieldType);
+                    var fieldValue = converter.FromDbValue(fieldType, dbValue);
+                    field.PublicSetterRef(ref row, fieldValue);
+                }
+            }
+            return (T)row;
         }
 
         public static List<T> ConvertToList<T>(this IDataReader reader, IOrmLiteDialectProvider dialectProvider, HashSet<string> onlyFields=null)
@@ -163,6 +221,20 @@ namespace ServiceStack.OrmLite
                     }
                 }
                 return (List<T>)(object)to.ToList();
+            }
+            if (typeof(T).Name.StartsWith("ValueTuple`", StringComparison.Ordinal))
+            {
+                var to = new List<T>();
+                var values = new object[reader.FieldCount];
+                using (reader)
+                {
+                    while (reader.Read())
+                    {
+                        var row = reader.ConvertToValueTuple<T>(values, dialectProvider);
+                        to.Add(row);
+                    }
+                }
+                return to;
             }
             if (typeof(T).Name.StartsWith("Tuple`", StringComparison.Ordinal))
             {
@@ -343,8 +415,7 @@ namespace ServiceStack.OrmLite
                 }
                 else
                 {
-                    var sqlInValues = sqlParam as SqlInValues;
-                    if (sqlInValues != null)
+                    if (sqlParam is SqlInValues sqlInValues)
                     {
                         escapedParams.Add(sqlInValues.ToSqlInString());
                     }
@@ -382,17 +453,38 @@ namespace ServiceStack.OrmLite
             return "{0}".SqlFmt(value);
         }
 
-        public static string[] IllegalSqlFragmentTokens = { 
-            "--", ";--", ";", "%", "/*", "*/", "@@", "@", 
+        public static Regex VerifyFragmentRegEx = new Regex("([^\\w]|^)+(--|;--|;|%|/\\*|\\*/|@@|@|char|nchar|varchar|nvarchar|alter|begin|cast|create|cursor|declare|delete|drop|end|exec|execute|fetch|insert|kill|open|select|sys|sysobjects|syscolumns|table|update)([^\\w]|$)+",
+            RegexOptions.Singleline | RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        public static Func<string,string> SqlVerifyFragmentFn { get; set; }
+
+        public static string SqlVerifyFragment(this string sqlFragment)
+        {
+            if (sqlFragment == null)
+                return null;
+
+            if (SqlVerifyFragmentFn != null)
+                return SqlVerifyFragmentFn(sqlFragment);
+
+            var fragmentToVerify = sqlFragment
+                .StripQuotedStrings('\'')
+                .StripQuotedStrings('"')
+                .StripQuotedStrings('`')
+                .ToLower();
+
+            var match = VerifyFragmentRegEx.Match(fragmentToVerify);
+            if (match.Success)
+                throw new ArgumentException("Potential illegal fragment detected: " + sqlFragment);
+
+            return sqlFragment;
+        }
+
+        public static string[] IllegalSqlFragmentTokens = {
+            "--", ";--", ";", "%", "/*", "*/", "@@", "@",
             "char", "nchar", "varchar", "nvarchar",
             "alter", "begin", "cast", "create", "cursor", "declare", "delete",
             "drop", "end", "exec", "execute", "fetch", "insert", "kill",
             "open", "select", "sys", "sysobjects", "syscolumns", "table", "update" };
-
-        public static string SqlVerifyFragment(this string sqlFragment)
-        {
-            return SqlVerifyFragment(sqlFragment, IllegalSqlFragmentTokens);
-        }
 
         public static string SqlVerifyFragment(this string sqlFragment, IEnumerable<string> illegalFragments)
         {
@@ -407,7 +499,7 @@ namespace ServiceStack.OrmLite
 
             foreach (var illegalFragment in illegalFragments)
             {
-                if ((fragmentToVerify.IndexOf(illegalFragment, StringComparison.Ordinal) >= 0))
+                if (fragmentToVerify.IndexOf(illegalFragment, StringComparison.Ordinal) >= 0)
                     throw new ArgumentException("Potential illegal fragment detected: " + sqlFragment);
             }
 
@@ -500,12 +592,13 @@ namespace ServiceStack.OrmLite
                             ? new IndexFieldsCacheKey(reader, modelDefinition, dialect)
                             : null;
 
+            Tuple<FieldDefinition, int, IOrmLiteConverter>[] value;
             if (cacheKey != null) 
             {
                 lock (indexFieldsCache)
                 {
-                    if (indexFieldsCache.ContainsKey(cacheKey))
-                        return indexFieldsCache[cacheKey];
+                    if (indexFieldsCache.TryGetValue(cacheKey, out value))
+                        return value;
                 }
             }
 
@@ -570,11 +663,11 @@ namespace ServiceStack.OrmLite
 
             if (cacheKey != null)
             {
-                lock(indexFieldsCache)
+                lock (indexFieldsCache)
                 {
-                    if (indexFieldsCache.ContainsKey(cacheKey))
-                        return indexFieldsCache[cacheKey];
-                    else if (indexFieldsCache.Count < maxCachedIndexFields)
+                    if (indexFieldsCache.TryGetValue(cacheKey, out value))
+                        return value;
+                    if (indexFieldsCache.Count < maxCachedIndexFields)
                         indexFieldsCache.Add(cacheKey, result);
                 }
             }
@@ -585,9 +678,8 @@ namespace ServiceStack.OrmLite
         private const int NotFound = -1;
         internal static int FindColumnIndex(IOrmLiteDialectProvider dialectProvider, FieldDefinition fieldDef, Dictionary<string, int> dbFieldMap)
         {
-            int index;
             var fieldName = dialectProvider.NamingStrategy.GetColumnName(fieldDef.FieldName);
-            if (dbFieldMap.TryGetValue(fieldName, out index))
+            if (dbFieldMap.TryGetValue(fieldName, out var index))
                 return index;
 
             index = TryGuessColumnIndex(fieldName, dbFieldMap);
@@ -685,9 +777,9 @@ namespace ServiceStack.OrmLite
 
         public static bool IsRefType(this Type fieldType)
         {
-            return (!fieldType.UnderlyingSystemType().IsValueType()
-                || JsConfig.TreatValueAsRefTypes.Contains(fieldType.IsGeneric()
-                    ? fieldType.GenericTypeDefinition()
+            return (!fieldType.UnderlyingSystemType().IsValueType
+                || JsConfig.TreatValueAsRefTypes.Contains(fieldType.IsGenericType
+                    ? fieldType.GetGenericTypeDefinition()
                     : fieldType))
                 && fieldType != typeof(string);
         }
@@ -756,7 +848,7 @@ namespace ServiceStack.OrmLite
                 var listInterface = fieldDef.FieldType.GetTypeWithGenericInterfaceOf(typeof(IList<>));
                 if (listInterface != null)
                 {
-                    var refType = listInterface.GenericTypeArguments()[0];
+                    var refType = listInterface.GetGenericArguments()[0];
                     var refModelDef = refType.GetModelDefinition();
                     var refField = modelDef.GetRefFieldDef(refModelDef, refType);
 
@@ -785,7 +877,7 @@ namespace ServiceStack.OrmLite
             }
 
             if (!hasChildRef)
-                throw new Exception("Could not find Child Reference for '{0}' on Parent '{1}'".Fmt(typeof(Child).Name, typeof(Parent).Name));
+                throw new Exception($"Could not find Child Reference for '{typeof(Child).Name}' on Parent '{typeof(Parent).Name}'");
 
             return parents;
         }
@@ -829,9 +921,8 @@ namespace ServiceStack.OrmLite
 
             foreach (var result in parents)
             {
-                object childResult;
                 var fkValue = refSelf.GetValue(result);
-                if (fkValue != null && map.TryGetValue(fkValue, out childResult))
+                if (fkValue != null && map.TryGetValue(fkValue, out var childResult))
                 {
                     fieldDef.SetValueFn(result, childResult);
                 }
@@ -851,9 +942,8 @@ namespace ServiceStack.OrmLite
 
             foreach (var result in parents)
             {
-                object childResult;
                 var pkValue = modelDef.PrimaryKey.GetValue(result);
-                if (map.TryGetValue(pkValue, out childResult))
+                if (map.TryGetValue(pkValue, out var childResult))
                 {
                     fieldDef.SetValueFn(result, childResult);
                 }
@@ -889,7 +979,7 @@ namespace ServiceStack.OrmLite
 
             var inDoubleQuotes = false;
             var inSingleQuotes = false;
-            var inBraces = false;
+            int inBracesCount = 0;
 
             var pos = 0;
 
@@ -920,18 +1010,22 @@ namespace ServiceStack.OrmLite
                 }
                 if (c == '(')
                 {
-                    inBraces = true;
+                    inBracesCount++;
                     continue;
                 }
                 if (c == ')')
                 {
-                    inBraces = false;
+                    inBracesCount--;
+                    if(inBracesCount > 0)
+                        continue;
 
                     var endPos = expr.IndexOf(',', i);
                     if (endPos == -1)
                         endPos = expr.Length;
 
-                    to.Add(expr.Substring(pos, endPos - pos).Trim());
+                    var arg = expr.Substring(pos, endPos - pos).Trim();
+                    if (!string.IsNullOrEmpty(arg))
+                        to.Add(arg);
 
                     pos = endPos;
                     continue;
@@ -939,7 +1033,7 @@ namespace ServiceStack.OrmLite
 
                 if (c == ',')
                 {
-                    if (!inBraces)
+                    if (inBracesCount == 0)
                     {
                         var arg = expr.Substring(pos, i - pos).Trim();
                         if (!string.IsNullOrEmpty(arg))
